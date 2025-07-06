@@ -3,3 +3,4 @@ gunicorn==22.0.0
 Werkzeug==3.0.6
 google-cloud-storage
 google-auth
+Flask-Cors==4.0.1
