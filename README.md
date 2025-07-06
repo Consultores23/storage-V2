@@ -1,20 +1,24 @@
 # Google Cloud Storage API Service
 
-Este servicio proporciona una API RESTful robusta y segura para gestionar recursos de Google Cloud Storage (GCS), incluyendo buckets y archivos (objetos). Está construido con Python y Flask, y diseñado para un despliegue ágil y escalable en Google Cloud Run.
+Este servicio proporciona una API RESTful robusta y segura para gestionar recursos de Google Cloud Storage (GCS), incluyendo buckets, directorios y archivos (objetos). Está construido con Python y Flask, y diseñado para un despliegue ágil y escalable en Google Cloud Run.
 
-El servicio utiliza las mejores prácticas de seguridad, delegando la firma de URLs a la API de IAM, lo que lo hace ideal para ejecutarse en entornos de GCP sin necesidad de gestionar claves de servicio manualmente.
+El servicio utiliza las mejores prácticas de seguridad, delegando la firma de URLs a la API de IAM, lo que lo hace ideal para ejecutarse en entornos de GCP sin necesidad de gestionar claves de servicio manualmente. Además, incluye soporte para CORS, permitiendo que sea consumido desde aplicaciones front-end de manera segura.
 
 ## Características
 
+-   **Soporte para CORS:** Habilitado para permitir peticiones desde cualquier origen de front-end.
 -   **Gestión de Buckets (CRUD):**
     -   Crear nuevos buckets de GCS.
     -   Listar todos los buckets de un proyecto.
     -   Obtener detalles de un bucket específico.
-    -   Eliminar buckets.
--   **Gestión de Archivos y Directorios (CRUD):**
+    -   Eliminar buckets (incluso si no están vacíos).
+-   **Gestión de Directorios:**
+    -   Crear directorios (simulados como objetos vacíos).
+    -   Eliminar un directorio y todo su contenido.
+-   **Gestión de Archivos (CRUD):**
     -   Subir archivos a un bucket, con soporte para prefijos (directorios).
     -   Listar archivos dentro de un bucket, con opción de filtrar por prefijo.
-    -   Generar URLs de descarga temporales y seguras (Signed URLs).
+    -   Generar URLs de descarga temporales y seguras (Signed URLs V4).
     -   Eliminar archivos de un bucket.
 
 ---
@@ -48,7 +52,7 @@ El servicio utiliza las mejores prácticas de seguridad, delegando la firma de U
     ```
 
 4.  **Autenticación de Google Cloud:**
-    Para desarrollo local, usa Application Default Credentials (ADC):
+    Para desarrollo local, usa Application Default Credentials (ADC). Tu usuario debe tener los permisos necesarios en IAM.
     ```bash
     gcloud auth application-default login
     ```
@@ -95,7 +99,7 @@ El servicio utiliza las mejores prácticas de seguridad, delegando la firma de U
       --platform managed \
       --region us-central1 \
       --set-env-vars GCP_PROJECT="tu-id-de-proyecto-gcp" \
-      --allow-unauthenticated # Opcional: para acceso público
+      --allow-unauthenticated # Opcional: para acceso público a la API
     ```
 
 ---
@@ -106,191 +110,78 @@ A continuación se muestran ejemplos usando `curl`. Reemplaza `http://localhost:
 
 ### 🪣 Operaciones con Buckets
 
-#### 1. Crear un nuevo Bucket (Create)
-Crea un nuevo bucket en tu proyecto de GCP.
+#### 1. Crear un Bucket
 * **Endpoint:** `POST /buckets`
 * **Ejemplo:**
     ```bash
     curl -X POST http://localhost:8080/buckets \
     -H "Content-Type: application/json" \
-    -d '{
-        "bucket_name": "mi-bucket-unico-para-pruebas-12345",
-        "location": "US-CENTRAL1"
-    }'
-    ```
-* **Respuesta Exitosa (201 Created):**
-    ```json
-    {
-      "bucket_details": {
-        "location": "US-CENTRAL1",
-        "name": "mi-bucket-unico-para-pruebas-12345"
-      },
-      "message": "Bucket mi-bucket-unico-para-pruebas-12345 created successfully."
-    }
+    -d '{"bucket_name": "mi-bucket-unico-12345", "location": "US-CENTRAL1"}'
     ```
 
-#### 2. Listar todos los Buckets (Read)
-Obtiene una lista de todos los buckets en el proyecto.
+#### 2. Listar Buckets
 * **Endpoint:** `GET /buckets`
 * **Ejemplo:**
     ```bash
     curl http://localhost:8080/buckets
     ```
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "buckets": [
-        {
-          "id": "mi-bucket-unico-para-pruebas-12345",
-          "location": "US-CENTRAL1",
-          "name": "mi-bucket-unico-para-pruebas-12345"
-        }
-      ]
-    }
-    ```
 
-#### 3. Obtener detalles de un Bucket (Read)
-Recupera la información de un bucket específico.
-* **Endpoint:** `GET /buckets/<bucket_name>`
-* **Ejemplo:**
-    ```bash
-    curl http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345
-    ```
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "id": "mi-bucket-unico-para-pruebas-12345",
-      "location": "US-CENTRAL1",
-      "name": "mi-bucket-unico-para-pruebas-12345",
-      "time_created": "2025-06-07T03:00:00.123Z"
-    }
-    ```
-
-#### 4. Eliminar un Bucket (Delete)
-Borra un bucket. Debe estar vacío.
+#### 3. Eliminar un Bucket
 * **Endpoint:** `DELETE /buckets/<bucket_name>`
 * **Ejemplo:**
     ```bash
-    curl -X DELETE http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345
-    ```
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "message": "Bucket mi-bucket-unico-para-pruebas-12345 deleted successfully."
-    }
+    curl -X DELETE http://localhost:8080/buckets/mi-bucket-unico-12345
     ```
 
-### 📄 Operaciones con Archivos y Directorios
+### 📁 Operaciones con Directorios
 
-#### 1. Subir un archivo (Create)
-Sube un archivo a la raíz del bucket.
-* **Endpoint:** `POST /buckets/<bucket_name>/files`
+#### 1. Crear un Directorio
+* **Endpoint:** `POST /buckets/<bucket_name>/directories`
 * **Ejemplo:**
     ```bash
-    # Crea un archivo de prueba
-    echo "Hola Mundo" > hola.txt
-
-    curl -X POST http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345/files \
-    -F "file=@hola.txt"
-    ```
-* **Respuesta Exitosa (201 Created):**
-    ```json
-    {
-      "message": "File hola.txt uploaded successfully to mi-bucket-unico-para-pruebas-12345.",
-      "file_details": {
-          "name": "hola.txt",
-          "bucket": "mi-bucket-unico-para-pruebas-12345",
-          "size": 11,
-          "content_type": "text/plain"
-      }
-    }
+    curl -X POST http://localhost:8080/buckets/mi-bucket-unico-12345/directories \
+    -H "Content-Type: application/json" \
+    -d '{"directory_name": "documentos/reportes/"}'
     ```
 
-#### 2. Subir un archivo a un Directorio (Create)
-Para simular un directorio, se sube el archivo con un prefijo.
+#### 2. Eliminar un Directorio y su Contenido
+* **Endpoint:** `DELETE /buckets/<bucket_name>/directories/<path:directory_name>`
+* **Ejemplo:**
+    ```bash
+    curl -X DELETE http://localhost:8080/buckets/mi-bucket-unico-12345/directories/documentos/reportes/
+    ```
+
+### 📄 Operaciones con Archivos
+
+#### 1. Subir un Archivo a un Directorio
 * **Endpoint:** `POST /buckets/<bucket_name>/files`
 * **Ejemplo:**
     ```bash
     # Crea un archivo de prueba
     echo "Reporte de ventas" > reporte.pdf
 
-    # Sube el archivo al "directorio" documentos/reportes/
-    curl -X POST http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345/files \
+    curl -X POST http://localhost:8080/buckets/mi-bucket-unico-12345/files \
     -F "file=@reporte.pdf" \
     -F "object_prefix=documentos/reportes/"
     ```
-* **Respuesta Exitosa (201 Created):**
-    ```json
-    {
-        "message": "File documentos/reportes/reporte.pdf uploaded successfully to mi-bucket-unico-para-pruebas-12345."
-    }
-    ```
 
-#### 3. Listar archivos en un Bucket (Read)
-Lista todos los objetos dentro de un bucket.
-* **Endpoint:** `GET /buckets/<bucket_name>/files`
-* **Ejemplo:**
-    ```bash
-    curl http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345/files
-    ```
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "files": [
-        { "name": "hola.txt", "size": 11, ... },
-        { "name": "documentos/reportes/reporte.pdf", "size": 18, ... }
-      ],
-      "bucket": "mi-bucket-unico-para-pruebas-12345",
-      "prefix_filter": null
-    }
-    ```
-
-#### 4. Listar archivos en un Directorio (Read)
-Filtra los objetos por un prefijo para listar el contenido de un "directorio".
+#### 2. Listar Archivos en un Directorio
 * **Endpoint:** `GET /buckets/<bucket_name>/files?prefix=<prefix>`
 * **Ejemplo:**
     ```bash
-    curl "http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345/files?prefix=documentos/reportes/"
-    ```
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "files": [
-        { "name": "documentos/reportes/reporte.pdf", "size": 18, ... }
-      ],
-      "bucket": "mi-bucket-unico-para-pruebas-12345",
-      "prefix_filter": "documentos/reportes/"
-    }
+    curl "http://localhost:8080/buckets/mi-bucket-unico-12345/files?prefix=documentos/reportes/"
     ```
 
-#### 5. Obtener URL de Descarga de un Archivo (Read)
-Genera una URL firmada (válida por 60 minutos) para descargar un archivo de forma segura.
+#### 3. Obtener URL de Descarga de un Archivo
 * **Endpoint:** `GET /buckets/<bucket_name>/files/<path:file_name>`
 * **Ejemplo:**
     ```bash
-    curl http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345/files/documentos/reportes/reporte.pdf
-    ```
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "file_name": "documentos/reportes/reporte.pdf",
-      "bucket": "mi-bucket-unico-para-pruebas-12345",
-      "download_url": "https://storage.googleapis.com/...",
-      "size": 18,
-      "content_type": "application/pdf"
-    }
+    curl http://localhost:8080/buckets/mi-bucket-unico-12345/files/documentos/reportes/reporte.pdf
     ```
 
-#### 6. Eliminar un Archivo (Delete)
-Borra un objeto específico del bucket.
+#### 4. Eliminar un Archivo
 * **Endpoint:** `DELETE /buckets/<bucket_name>/files/<path:file_name>`
 * **Ejemplo:**
     ```bash
-    curl -X DELETE http://localhost:8080/buckets/mi-bucket-unico-para-pruebas-12345/files/documentos/reportes/reporte.pdf
-    ```
-* **Respuesta Exitosa (200 OK):**
-    ```json
-    {
-      "message": "File documentos/reportes/reporte.pdf deleted successfully from bucket mi-bucket-unico-para-pruebas-12345."
-    }
+    curl -X DELETE http://localhost:8080/buckets/mi-bucket-unico-12345/files/documentos/reportes/reporte.pdf
     ```
