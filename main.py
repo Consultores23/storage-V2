@@ -1,6 +1,7 @@
 import os
 import datetime
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import werkzeug.utils
 
 # Importaciones de Google Cloud y Auth
@@ -10,6 +11,9 @@ from google.auth import compute_engine
 from google.auth.transport import requests
 
 app = Flask(__name__)
+# Habilitar CORS para todas las rutas y orígenes.
+# Esto es crucial para que un front-end pueda consumir esta API desde otro dominio.
+CORS(app)
 
 # Inicializar cliente de Storage. Asume que la autenticación está manejada
 # por el entorno (ADC localmente, Service Account en Cloud Run).
@@ -85,7 +89,7 @@ def delete_bucket(bucket_name):
         return jsonify({"error": "Storage client not initialized."}), 500
     try:
         bucket = storage_client.get_bucket(bucket_name)
-        bucket.delete(force=False)
+        bucket.delete(force=True) # Se usa force=True para conveniencia en el desarrollo.
         return jsonify({"message": f"Bucket {bucket_name} deleted successfully."}), 200
     except NotFound:
         return jsonify({"error": f"Bucket {bucket_name} not found."}), 404
@@ -94,7 +98,7 @@ def delete_bucket(bucket_name):
     except Exception as e:
         return jsonify({"error": f"Could not delete bucket: {str(e)}"}), 500
 
-# --- File (Object) Operations ---
+# --- File (Object) and Directory Operations ---
 
 @app.route('/buckets/<bucket_name>/files', methods=['POST'])
 def upload_file(bucket_name):
@@ -112,9 +116,15 @@ def upload_file(bucket_name):
     except NotFound:
         return jsonify({"error": f"Bucket {bucket_name} not found."}), 404
 
+    # El prefijo (directorio) puede venir del formulario
+    object_prefix = request.form.get('object_prefix', '')
+    if object_prefix and not object_prefix.endswith('/'):
+        object_prefix += '/'
+
     if file:
         filename_secure = werkzeug.utils.secure_filename(file.filename)
-        blob = bucket.blob(filename_secure)
+        blob_name = f"{object_prefix}{filename_secure}"
+        blob = bucket.blob(blob_name)
         
         try:
             blob.upload_from_file(file, content_type=file.content_type)
@@ -151,17 +161,10 @@ def list_files_in_bucket(bucket_name):
     except Exception as e:
         return jsonify({"error": f"Could not list files in bucket {bucket_name}: {str(e)}"}), 500
 
-# ==============================================================================
-# RUTA REFACTORIZADA PARA GENERAR URLS FIRMADAS EN CLOUD RUN
-# ==============================================================================
 @app.route('/buckets/<bucket_name>/files/<path:file_name>', methods=['GET'])
 def download_file(bucket_name, file_name):
     if not storage_client:
         return jsonify({"error": "Storage client not initialized."}), 500
-    """
-    Generates a V4 signed URL for a file by delegating signing to the IAM API.
-    This is the recommended approach for Cloud Run/Functions environments.
-    """
     try:
         bucket = storage_client.get_bucket(bucket_name)
     except NotFound:
@@ -173,14 +176,10 @@ def download_file(bucket_name, file_name):
         return jsonify({"error": f"File {file_name} not found in bucket {bucket_name}."}), 404
 
     try:
-        # En un entorno GCP (como Cloud Run), esto obtiene las credenciales del
-        # service account que ejecuta el servicio.
         creds = compute_engine.Credentials()
         creds.refresh(requests.Request())
         service_account_email = creds.service_account_email
 
-        # Al pasar 'service_account_email' y 'access_token', la librería
-        # delega la firma a la API de IAM en lugar de buscar una clave privada.
         signed_url = blob.generate_signed_url(
             version="v4",
             expiration=datetime.timedelta(minutes=60),
@@ -198,7 +197,6 @@ def download_file(bucket_name, file_name):
         }), 200
 
     except Exception as e:
-        # Este error se mostrará si el service account no tiene el rol "Service Account Token Creator".
         error_message = f"Could not generate signed URL for {file_name}: {str(e)}"
         print(f"ERROR: {error_message}")
         return jsonify({"error": error_message}), 500
@@ -219,6 +217,54 @@ def delete_file(bucket_name, file_name):
         return jsonify({"error": f"Bucket {bucket_name} not found."}), 404
     except Exception as e:
         return jsonify({"error": f"Could not delete file {file_name}: {str(e)}"}), 500
+
+# --- Directory Operations ---
+
+@app.route('/buckets/<bucket_name>/directories', methods=['POST'])
+def create_directory(bucket_name):
+    if not storage_client:
+        return jsonify({"error": "Storage client not initialized."}), 500
+    data = request.get_json()
+    if not data or 'directory_name' not in data:
+        return jsonify({"error": "Missing directory_name in request body"}), 400
+    
+    directory_name = data['directory_name']
+    if not directory_name.endswith('/'):
+        directory_name += '/'
+
+    try:
+        bucket = storage_client.get_bucket(bucket_name)
+        blob = bucket.blob(directory_name)
+        # Sube un objeto vacío para representar el directorio
+        blob.upload_from_string('', content_type='application/x-directory')
+        return jsonify({"message": f"Directory {directory_name} created successfully in {bucket_name}."}), 201
+    except NotFound:
+        return jsonify({"error": f"Bucket {bucket_name} not found."}), 404
+    except Exception as e:
+        return jsonify({"error": f"Could not create directory: {str(e)}"}), 500
+
+@app.route('/buckets/<bucket_name>/directories/<path:directory_name>', methods=['DELETE'])
+def delete_directory(bucket_name, directory_name):
+    if not storage_client:
+        return jsonify({"error": "Storage client not initialized."}), 500
+    if not directory_name.endswith('/'):
+        directory_name += '/'
+    
+    try:
+        bucket = storage_client.get_bucket(bucket_name)
+        blobs_to_delete = list(storage_client.list_blobs(bucket_name, prefix=directory_name))
+        
+        if not blobs_to_delete:
+            return jsonify({"error": f"Directory {directory_name} not found or is already empty."}), 404
+
+        for blob in blobs_to_delete:
+            blob.delete()
+            
+        return jsonify({"message": f"Directory {directory_name} and all its contents deleted successfully."}), 200
+    except NotFound:
+        return jsonify({"error": f"Bucket {bucket_name} not found."}), 404
+    except Exception as e:
+        return jsonify({"error": f"Could not delete directory: {str(e)}"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
